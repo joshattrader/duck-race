@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Duck Race</title>
+<style>
+  :root {
+    --bg: #0f2a3d;
+    --panel: #ffffff;
+    --ink: #13212c;
+    --muted: #5a6b78;
+    --accent: #ffb400;
+    --accent-ink: #3a2a00;
+    --water-a: #3fa7d6;
+    --water-b: #3597c4;
+    --start-zone: #2b7fa8;
+    --danger: #c0392b;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    overflow: hidden;
+  }
+  .screen { display: none; height: 100vh; }
+  .screen.active { display: flex; }
+
+  /* ---------- Setup ---------- */
+  #setup { align-items: center; justify-content: center; padding: 16px; }
+  .card {
+    background: var(--panel);
+    border-radius: 16px;
+    padding: 28px;
+    width: min(520px, 100%);
+    box-shadow: 0 12px 40px rgba(0,0,0,.35);
+  }
+  h1 { margin: 0 0 4px; font-size: 32px; }
+  .sub { margin: 0 0 18px; color: var(--muted); }
+  label { font-weight: 600; display: block; margin-bottom: 6px; }
+  textarea {
+    width: 100%;
+    height: 280px;
+    font: inherit;
+    font-size: 18px;
+    line-height: 1.5;
+    padding: 10px 12px;
+    border: 2px solid #cfd8de;
+    border-radius: 10px;
+    resize: vertical;
+  }
+  textarea:focus { outline: none; border-color: var(--accent); }
+  .row { display: flex; gap: 10px; align-items: center; margin-top: 14px; flex-wrap: wrap; }
+  .count { color: var(--muted); font-size: 14px; }
+  .error { color: var(--danger); font-weight: 600; min-height: 1.4em; margin-top: 8px; }
+  button {
+    font: inherit;
+    font-weight: 700;
+    font-size: 18px;
+    padding: 12px 22px;
+    border-radius: 10px;
+    border: 0;
+    cursor: pointer;
+  }
+  .primary { background: var(--accent); color: var(--accent-ink); }
+  .primary:hover { filter: brightness(1.05); }
+  .secondary { background: #e6ecf0; color: var(--ink); }
+  .secondary:hover { background: #dbe3e8; }
+  .hint { font-size: 13px; color: var(--muted); margin-left: auto; }
+
+  /* ---------- Race ---------- */
+  #race { flex-direction: column; }
+  .race-header {
+    height: 56px;
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-size: 24px;
+    font-weight: 700;
+    letter-spacing: .5px;
+  }
+  #track {
+    position: relative;
+    flex: 1 1 auto;
+    margin: 0 12px 12px;
+    border-radius: 12px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .lane {
+    position: relative;
+    flex: 1 1 0;
+    min-height: 0;
+    background: var(--water-a);
+    border-bottom: 1px dashed rgba(255,255,255,.35);
+  }
+  .lane:nth-child(even) { background: var(--water-b); }
+  .lane:last-child { border-bottom: 0; }
+  .start-zone {
+    position: absolute; top: 0; bottom: 0; left: 0;
+    background: var(--start-zone);
+  }
+  .finish-line {
+    position: absolute; top: 0; bottom: 0; width: 14px;
+    background-image:
+      linear-gradient(45deg, #111 25%, transparent 25%, transparent 75%, #111 75%),
+      linear-gradient(45deg, #111 25%, transparent 25%, transparent 75%, #111 75%);
+    background-color: #fff;
+    background-size: 14px 14px;
+    background-position: 0 0, 7px 7px;
+    z-index: 1;
+  }
+  .duck {
+    position: absolute;
+    left: 0;
+    top: 50%;
+    will-change: transform;
+    z-index: 2;
+  }
+  .duck svg { display: block; animation: bob .45s ease-in-out infinite alternate; }
+  .duck.finished svg { animation: none; }
+  @keyframes bob {
+    from { transform: translateY(-2px) rotate(-3deg); }
+    to   { transform: translateY(2px) rotate(3deg); }
+  }
+  .duck .name {
+    position: absolute;
+    right: 100%;
+    top: 50%;
+    transform: translateY(-50%);
+    margin-right: 6px;
+    padding: 2px 10px;
+    border-radius: 999px;
+    color: #fff;
+    font-weight: 700;
+    white-space: nowrap;
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-shadow: 0 1px 2px rgba(0,0,0,.4);
+    box-shadow: 0 1px 3px rgba(0,0,0,.3);
+  }
+  .place {
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    transform: translateY(-50%) scale(.5);
+    opacity: 0;
+    background: #fff;
+    color: var(--ink);
+    font-weight: 800;
+    border-radius: 999px;
+    padding: 2px 10px;
+    transition: transform .25s, opacity .25s;
+    z-index: 3;
+  }
+  .place.show { opacity: 1; transform: translateY(-50%) scale(1); }
+  .place.gold { background: var(--accent); color: var(--accent-ink); }
+
+  #countdown {
+    position: fixed; inset: 0;
+    display: none;
+    align-items: center; justify-content: center;
+    background: rgba(8, 24, 36, .45);
+    color: #fff;
+    font-size: min(40vw, 320px);
+    font-weight: 900;
+    text-shadow: 0 8px 30px rgba(0,0,0,.5);
+    z-index: 10;
+    pointer-events: none;
+  }
+  #countdown.show { display: flex; }
+  #countdown span { animation: pop .9s ease-out both; }
+  @keyframes pop {
+    0% { transform: scale(1.6); opacity: 0; }
+    25% { transform: scale(1); opacity: 1; }
+    100% { transform: scale(.85); opacity: .9; }
+  }
+
+  /* ---------- Results ---------- */
+  #results { align-items: center; justify-content: center; padding: 16px; }
+  #results .card { width: min(820px, 100%); max-height: calc(100vh - 32px); display: flex; flex-direction: column; }
+  #results h1 { font-size: 36px; }
+  #order {
+    list-style: none;
+    margin: 12px 0 6px;
+    padding: 0;
+    overflow-y: auto;
+    display: grid;
+    gap: 8px 24px;
+  }
+  #order.two-col { grid-template-columns: 1fr 1fr; grid-auto-flow: column; }
+  #order li {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 6px 12px;
+    border-radius: 10px;
+    background: #f2f6f8;
+    font-size: var(--result-size, 28px);
+    font-weight: 700;
+    min-width: 0;
+  }
+  #order li.winner { background: #fff4d1; box-shadow: inset 0 0 0 3px var(--accent); }
+  #order .pos { min-width: 2.2em; color: var(--muted); font-variant-numeric: tabular-nums; }
+  #order .swatch { width: .7em; height: .7em; border-radius: 50%; flex: 0 0 auto; }
+  #order .who { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #copyMsg { color: #1e8e3e; font-weight: 600; font-size: 15px; }
+
+  #confetti { position: fixed; inset: 0; pointer-events: none; z-index: 20; }
+</style>
+</head>
+<body>
+
+<section id="setup" class="screen active">
+  <div class="card">
+    <h1>🦆 Duck Race</h1>
+    <p class="sub">Race the ducks to pick today's standup order.</p>
+    <label for="names">Duck names, one per line</label>
+    <textarea id="names" spellcheck="false" placeholder="Ana&#10;Ben&#10;Chris"></textarea>
+    <div class="error" id="setupError" role="alert"></div>
+    <div class="row">
+      <button class="primary" id="startBtn">Start Race</button>
+      <span class="count" id="count"></span>
+      <span class="hint">Ctrl/⌘ + Enter to start</span>
+    </div>
+  </div>
+</section>
+
+<section id="race" class="screen">
+  <div class="race-header" id="raceTitle">Get ready…</div>
+  <div id="track"></div>
+</section>
+
+<section id="results" class="screen">
+  <div class="card">
+    <h1>🏁 Standup order</h1>
+    <ol id="order"></ol>
+    <div class="row">
+      <button class="primary" id="againBtn">Race Again</button>
+      <button class="secondary" id="setupBtn">Setup Race</button>
+      <button class="secondary" id="copyBtn">Copy order</button>
+      <span id="copyMsg" aria-live="polite"></span>
+    </div>
+  </div>
+</section>
+
+<div id="countdown"></div>
+<canvas id="confetti"></canvas>
+
+<script>
+(() => {
+  const STORAGE_KEY = 'duckRace.names';
+  const MIN_DUCKS = 2;
+  const MAX_DUCKS = 20;
+  const COUNTDOWN_SECONDS = 3;
+  const RACE_MS = 5000;
+  // The winner crosses at FIRST_FINISH_MS, the last duck exactly at RACE_MS.
+  const FIRST_FINISH_MS = 4200;
+
+  const $ = (id) => document.getElementById(id);
+  const namesEl = $('names');
+  const setupError = $('setupError');
+  const countEl = $('count');
+  const track = $('track');
+  const countdownEl = $('countdown');
+  const raceTitle = $('raceTitle');
+  const orderEl = $('order');
+  const copyMsg = $('copyMsg');
+
+  let roster = [];      // [{ name, color, wing }]
+  let lastOrder = [];   // roster indices in finishing order
+  let raceFrame = null;
+
+  // ---------- Storage (best effort; storage may be blocked) ----------
+  function loadNames() {
+    try { return localStorage.getItem(STORAGE_KEY) || ''; } catch { return ''; }
+  }
+  function saveNames(text) {
+    try { localStorage.setItem(STORAGE_KEY, text); } catch { /* not remembered */ }
+  }
+
+  // ---------- Randomness ----------
+  // Unbiased integer in [0, n) via rejection sampling on crypto random values.
+  function randomInt(n) {
+    const buf = new Uint32Array(1);
+    const limit = Math.floor(0x100000000 / n) * n;
+    let x;
+    do { crypto.getRandomValues(buf); x = buf[0]; } while (x >= limit);
+    return x % n;
+  }
+  function randomFloat() {
+    const buf = new Uint32Array(1);
+    crypto.getRandomValues(buf);
+    return buf[0] / 0x100000000;
+  }
+  function shuffle(arr) {
+    const a = arr.slice();
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = randomInt(i + 1);
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+  }
+
+  // ---------- Roster ----------
+  function parseNames(text) {
+    const names = text.split('\n').map((s) => s.trim()).filter(Boolean);
+    const seen = new Map();
+    return names.map((name) => {
+      const key = name.toLowerCase();
+      const n = (seen.get(key) || 0) + 1;
+      seen.set(key, n);
+      return n > 1 ? `${name} (${n})` : name;
+    });
+  }
+  function buildRoster(names) {
+    return names.map((name, i) => {
+      const hue = Math.round((i * 137.508 + 20) % 360);
+      return { name, color: `hsl(${hue} 80% 55%)`, wing: `hsl(${hue} 70% 40%)` };
+    });
+  }
+  function updateCount() {
+    const n = parseNames(namesEl.value).length;
+    countEl.textContent = n === 1 ? '1 duck' : `${n} ducks`;
+  }
+
+  // ---------- Screens ----------
+  function show(id) {
+    document.querySelectorAll('.screen').forEach((s) => s.classList.toggle('active', s.id === id));
+  }
+
+  // ---------- Duck art ----------
+  function duckSvg(d, size) {
+    return `<svg width="${size * 1.33}" height="${size}" viewBox="0 0 64 48" aria-hidden="true">
+      <ellipse cx="32" cy="44" rx="24" ry="3" fill="rgba(255,255,255,.35)"/>
+      <path d="M4 26 L14 30 L10 36 Z" fill="${d.wing}"/>
+      <ellipse cx="28" cy="32" rx="22" ry="11" fill="${d.color}"/>
+      <circle cx="46" cy="17" r="10" fill="${d.color}"/>
+      <path d="M54 14 L64 18 L54 22 Z" fill="#ff8a00"/>
+      <circle cx="49" cy="14" r="2.2" fill="#111"/>
+      <circle cx="49.7" cy="13.3" r=".7" fill="#fff"/>
+      <ellipse cx="25" cy="30" rx="11" ry="6" fill="${d.wing}"/>
+    </svg>`;
+  }
+
+  // ---------- Pace curves ----------
+  // Progress for a duck is its own clock u = t / finishTime plus a wobble made of
+  // sin(k·π·u) terms. Every term is 0 at u=0 and u=1, so each duck starts at 0 and
+  // reaches the line exactly at its pre-chosen finish time. Amplitudes are capped so
+  // Σ a_k·k·π < 1, which keeps progress strictly increasing (no ducks swimming backwards)
+  // while still letting positions swap mid-race.
+  function makePace(finishMs) {
+    const amps = [0.13, 0.055, 0.02];
+    const terms = amps.map((a, i) => ({
+      k: i + 1,
+      a: a * (0.5 + 0.5 * randomFloat()) * (randomFloat() < 0.5 ? -1 : 1),
+    }));
+    return (t) => {
+      const u = Math.min(1, t / finishMs);
+      let p = u;
+      for (const { k, a } of terms) p += a * Math.sin(k * Math.PI * u);
+      return Math.max(0, Math.min(1, p));
+    };
+  }
+
+  // ---------- Race ----------
+  function ordinal(n) {
+    const s = ['th', 'st', 'nd', 'rd'];
+    const v = n % 100;
+    return n + (s[(v - 20) % 10] || s[v] || s[0]);
+  }
+
+  function setupTrack() {
+    const n = roster.length;
+    const laneH = Math.max(24, Math.min(90, (window.innerHeight - 68) / n));
+    const duckSize = Math.round(laneH * 0.78);
+    const fontSize = Math.round(Math.max(12, Math.min(22, laneH * 0.4)));
+
+    track.innerHTML = '';
+    const lanes = roster.map((d) => {
+      const lane = document.createElement('div');
+      lane.className = 'lane';
+      lane.innerHTML = `
+        <div class="start-zone"></div>
+        <div class="finish-line"></div>
+        <div class="duck">
+          <span class="name" style="background:${d.wing};font-size:${fontSize}px">${escapeHtml(d.name)}</span>
+          ${duckSvg(d, duckSize)}
+        </div>
+        <div class="place" style="font-size:${fontSize}px"></div>`;
+      track.appendChild(lane);
+      return lane;
+    });
+
+    // Label zone at the start is as wide as the widest name so labels are fully visible.
+    const labelW = Math.min(
+      220,
+      Math.max(...lanes.map((l) => l.querySelector('.name').offsetWidth)) + 16
+    );
+    const trackW = track.clientWidth;
+    const duckW = duckSize * 1.33;
+    const placeW = fontSize * 3.2 + 16;
+    const finishX = trackW - placeW - 14;
+
+    return lanes.map((lane) => {
+      lane.querySelector('.start-zone').style.width = `${labelW}px`;
+      lane.querySelector('.finish-line').style.left = `${finishX}px`;
+      const duckEl = lane.querySelector('.duck');
+      duckEl.style.marginTop = `${-duckSize / 2}px`;
+      return {
+        lane,
+        duckEl,
+        placeEl: lane.querySelector('.place'),
+        startX: labelW,
+        dist: finishX - labelW - duckW,
+      };
+    });
+  }
+
+  function positionDuck(view, p) {
+    view.duckEl.style.transform = `translateX(${view.startX + p * view.dist}px)`;
+  }
+
+  function runCountdown() {
+    return new Promise((resolve) => {
+      let n = COUNTDOWN_SECONDS;
+      countdownEl.classList.add('show');
+      const tick = () => {
+        if (n === 0) {
+          countdownEl.classList.remove('show');
+          countdownEl.innerHTML = '';
+          resolve();
+          return;
+        }
+        countdownEl.innerHTML = `<span>${n}</span>`;
+        n--;
+        setTimeout(tick, 1000);
+      };
+      tick();
+    });
+  }
+
+  async function startRace() {
+    cancelAnimationFrame(raceFrame);
+    stopConfetti();
+    show('race');
+    raceTitle.textContent = 'Get ready…';
+
+    const views = setupTrack();
+    views.forEach((v) => positionDuck(v, 0));
+
+    // Decide the finishing order up front with a fair shuffle, then give each duck a
+    // finish time by place and a wobbly pace curve that lands exactly on it.
+    const n = roster.length;
+    const order = shuffle(roster.map((_, i) => i));
+    const finishTimes = new Array(n);
+    order.forEach((duckIdx, place) => {
+      finishTimes[duckIdx] = n === 1
+        ? RACE_MS
+        : FIRST_FINISH_MS + (place * (RACE_MS - FIRST_FINISH_MS)) / (n - 1);
+    });
+    const paces = finishTimes.map(makePace);
+    const placeOf = new Array(n);
+    order.forEach((duckIdx, place) => { placeOf[duckIdx] = place; });
+
+    await runCountdown();
+    raceTitle.textContent = 'And they\'re off! 🦆';
+
+    const t0 = performance.now();
+    const frame = (now) => {
+      const t = Math.min(RACE_MS, now - t0);
+      views.forEach((v, i) => {
+        positionDuck(v, paces[i](t));
+        if (t >= finishTimes[i] && !v.duckEl.classList.contains('finished')) {
+          v.duckEl.classList.add('finished');
+          v.placeEl.textContent = ordinal(placeOf[i] + 1);
+          v.placeEl.classList.add('show');
+          if (placeOf[i] === 0) {
+            v.placeEl.classList.add('gold');
+            raceTitle.textContent = `${roster[i].name} wins! 🏆`;
+          }
+        }
+      });
+      if (t < RACE_MS) {
+        raceFrame = requestAnimationFrame(frame);
+      } else {
+        lastOrder = order;
+        setTimeout(showResults, 800);
+      }
+    };
+    raceFrame = requestAnimationFrame(frame);
+  }
+
+  // ---------- Results ----------
+  function showResults() {
+    const n = lastOrder.length;
+    orderEl.classList.toggle('two-col', n > 10);
+    const rows = n > 10 ? Math.ceil(n / 2) : n;
+    orderEl.style.gridTemplateRows = `repeat(${rows}, auto)`;
+    const size = n <= 6 ? 32 : n <= 10 ? 26 : 22;
+    orderEl.style.setProperty('--result-size', `${size}px`);
+    orderEl.innerHTML = lastOrder.map((idx, place) => {
+      const d = roster[idx];
+      return `<li class="${place === 0 ? 'winner' : ''}">
+        <span class="pos">${place + 1}.</span>
+        <span class="swatch" style="background:${d.color}"></span>
+        <span class="who">${escapeHtml(d.name)}${place === 0 ? ' 🏆' : ''}</span>
+      </li>`;
+    }).join('');
+    copyMsg.textContent = '';
+    show('results');
+    startConfetti(roster[lastOrder[0]].color);
+  }
+
+  function orderText() {
+    return 'Standup order:\n' + lastOrder.map((idx, i) => `${i + 1}. ${roster[idx].name}`).join('\n');
+  }
+
+  async function copyOrder() {
+    const text = orderText();
+    let ok = false;
+    try {
+      await navigator.clipboard.writeText(text);
+      ok = true;
+    } catch {
+      // Fallback for file:// or browsers without async clipboard access.
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try { ok = document.execCommand('copy'); } catch { ok = false; }
+      ta.remove();
+    }
+    copyMsg.textContent = ok ? 'Copied!' : 'Copy failed. Select the list manually.';
+  }
+
+  // ---------- Confetti ----------
+  const canvas = $('confetti');
+  const ctx = canvas.getContext('2d');
+  let confettiFrame = null;
+
+  function startConfetti(winnerColor) {
+    stopConfetti();
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    const colors = [winnerColor, '#ffb400', '#ff5e7e', '#4cd97b', '#4aa8ff', '#ffffff'];
+    const pieces = Array.from({ length: 160 }, () => ({
+      x: canvas.width / 2 + (randomFloat() - 0.5) * 200,
+      y: canvas.height * 0.3,
+      vx: (randomFloat() - 0.5) * 16,
+      vy: -randomFloat() * 14 - 4,
+      w: 6 + randomFloat() * 6,
+      h: 8 + randomFloat() * 8,
+      rot: randomFloat() * Math.PI,
+      vr: (randomFloat() - 0.5) * 0.3,
+      color: colors[randomInt(colors.length)],
+    }));
+    const start = performance.now();
+    const step = (now) => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      for (const p of pieces) {
+        p.vy += 0.35;
+        p.vx *= 0.99;
+        p.x += p.vx;
+        p.y += p.vy;
+        p.rot += p.vr;
+        ctx.save();
+        ctx.translate(p.x, p.y);
+        ctx.rotate(p.rot);
+        ctx.fillStyle = p.color;
+        ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
+        ctx.restore();
+      }
+      if (now - start < 3500) confettiFrame = requestAnimationFrame(step);
+      else ctx.clearRect(0, 0, canvas.width, canvas.height);
+    };
+    confettiFrame = requestAnimationFrame(step);
+  }
+  function stopConfetti() {
+    cancelAnimationFrame(confettiFrame);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+  }
+
+  // ---------- Helpers ----------
+  function escapeHtml(s) {
+    return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  // ---------- Wiring ----------
+  function onStart() {
+    const names = parseNames(namesEl.value);
+    if (names.length < MIN_DUCKS) {
+      setupError.textContent = `Add at least ${MIN_DUCKS} ducks to race.`;
+      return;
+    }
+    if (names.length > MAX_DUCKS) {
+      setupError.textContent = `That's ${names.length} ducks. The pond fits ${MAX_DUCKS} at most.`;
+      return;
+    }
+    setupError.textContent = '';
+    saveNames(namesEl.value.split('\n').map((s) => s.trim()).filter(Boolean).join('\n'));
+    roster = buildRoster(names);
+    startRace();
+  }
+
+  $('startBtn').addEventListener('click', onStart);
+  namesEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); onStart(); }
+  });
+  namesEl.addEventListener('input', () => { setupError.textContent = ''; updateCount(); });
+  $('againBtn').addEventListener('click', startRace);
+  $('setupBtn').addEventListener('click', () => {
+    stopConfetti();
+    show('setup');
+    namesEl.focus();
+  });
+  $('copyBtn').addEventListener('click', copyOrder);
+
+  namesEl.value = loadNames();
+  updateCount();
+  namesEl.focus();
+
+  // Exposed for automated checks; harmless in normal use.
+  window.__duckRace = { shuffle, parseNames, makePace, getLastOrder: () => lastOrder.slice() };
+})();
+</script>
+</body>
+</html>
