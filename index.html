@@ -211,6 +211,9 @@
   #order .swatch { width: .7em; height: .7em; border-radius: 50%; flex: 0 0 auto; }
   #order .who { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #copyMsg { color: #1e8e3e; font-weight: 600; font-size: 15px; }
+  #resultNote { margin: 0; color: var(--muted); font-size: 16px; }
+  .check { display: inline-flex; align-items: center; gap: 8px; margin: 0; cursor: pointer; }
+  #track canvas { display: block; width: 100%; height: 100%; }
 
   #confetti { position: fixed; inset: 0; pointer-events: none; z-index: 20; }
 </style>
@@ -223,6 +226,7 @@
     <p class="sub">Race the ducks to pick today's standup order.</p>
     <label for="names">Duck names, one per line</label>
     <textarea id="names" spellcheck="false" placeholder="Ana&#10;Ben&#10;Chris"></textarea>
+    <label class="check"><input type="checkbox" id="hundredX"> 100x ducks</label>
     <div class="error" id="setupError" role="alert"></div>
     <div class="row">
       <button class="primary" id="startBtn">Start Race</button>
@@ -240,6 +244,7 @@
 <section id="results" class="screen">
   <div class="card">
     <h1>🏁 Standup order</h1>
+    <p id="resultNote"></p>
     <ol id="order"></ol>
     <div class="row">
       <button class="primary" id="againBtn">Race Again</button>
@@ -257,7 +262,9 @@
 (() => {
   const STORAGE_KEY = 'duckRace.names';
   const MIN_DUCKS = 2;
-  const MAX_DUCKS = 20;
+  // Up to LANE_LIMIT ducks get DOM lanes; bigger fields race on a single canvas.
+  const LANE_LIMIT = 24;
+  const RESULTS_SHOWN = 200;
   const COUNTDOWN_SECONDS = 3;
   const RACE_MS = 5000;
   // The winner crosses at FIRST_FINISH_MS, the last duck exactly at RACE_MS.
@@ -274,7 +281,9 @@
   const copyMsg = $('copyMsg');
 
   let roster = [];      // [{ name, color, wing }]
-  let lastOrder = [];   // roster indices in finishing order
+  let ducks = [];       // [{ owner, label }]; 100 per roster entry in 100x mode
+  let lastOrder = [];   // roster indices in finishing order (by each name's best duck)
+  let winnerDuck = 0;   // ducks index of the winner
   let raceFrame = null;
 
   // ---------- Storage (best effort; storage may be blocked) ----------
@@ -326,8 +335,8 @@
     });
   }
   function updateCount() {
-    const n = parseNames(namesEl.value).length;
-    countEl.textContent = n === 1 ? '1 duck' : `${n} ducks`;
+    const n = parseNames(namesEl.value).length * ($('hundredX').checked ? 100 : 1);
+    countEl.textContent = n === 1 ? '1 duck' : `${n.toLocaleString()} ducks`;
   }
 
   // ---------- Screens ----------
@@ -377,13 +386,14 @@
   }
 
   function setupTrack() {
-    const n = roster.length;
+    const n = ducks.length;
     const laneH = Math.max(24, Math.min(90, (window.innerHeight - 68) / n));
     const duckSize = Math.round(laneH * 0.78);
     const fontSize = Math.round(Math.max(12, Math.min(22, laneH * 0.4)));
 
     track.innerHTML = '';
-    const lanes = roster.map((d) => {
+    const lanes = ducks.map(({ owner }) => {
+      const d = roster[owner];
       const lane = document.createElement('div');
       lane.className = 'lane';
       lane.innerHTML = `
@@ -427,6 +437,82 @@
     view.duckEl.style.transform = `translateX(${view.startX + p * view.dist}px)`;
   }
 
+  // Big fields: every duck on one canvas, scattered over the pond instead of in lanes.
+  // Each name's duck is drawn once to a sprite and blitted, so 10k+ ducks stay smooth.
+  // The current leader (then the winner) is ringed and labelled so the race reads at any size.
+  function setupPond(paces, finishTimes, winner) {
+    track.innerHTML = '<canvas></canvas>';
+    const g = track.firstChild.getContext('2d');
+    const dpr = window.devicePixelRatio || 1;
+    const W = track.clientWidth, H = track.clientHeight;
+    g.canvas.width = Math.round(W * dpr);
+    g.canvas.height = Math.round(H * dpr);
+    g.scale(dpr, dpr);
+
+    const n = ducks.length;
+    const duckH = Math.max(6, Math.min(40, Math.sqrt((W * H) / n) * 0.9));
+    const duckW = duckH * 1.33;
+    const startX = 24, finishX = W - 40, dist = finishX - startX - duckW;
+    const font = Math.round(Math.max(14, Math.min(22, H / 30)));
+
+    // Shuffled stratified rows so each name's ducks spread across the pond; paint top to bottom.
+    const slots = shuffle(ducks.map((_, i) => i));
+    const ys = slots.map((s) => 4 + ((s + randomFloat()) / n) * (H - duckH - 8));
+    const drawOrder = slots.map((_, i) => i).sort((a, b) => ys[a] - ys[b]);
+    const xs = new Float32Array(n);
+    const sprites = roster.map((d) => {
+      const img = new Image();
+      img.src = 'data:image/svg+xml,' + encodeURIComponent(
+        duckSvg(d, 48).replace('<svg ', '<svg xmlns="http://www.w3.org/2000/svg" '));
+      return img;
+    });
+
+    return (t) => {
+      g.fillStyle = '#3fa7d6';
+      g.fillRect(0, 0, W, H);
+      g.fillStyle = '#2b7fa8';
+      g.fillRect(0, 0, startX, H);
+      for (let y = 0; y < H; y += 7) {
+        g.fillStyle = (y / 7) % 2 ? '#111' : '#fff';
+        g.fillRect(finishX, y, 7, 7);
+        g.fillStyle = (y / 7) % 2 ? '#fff' : '#111';
+        g.fillRect(finishX + 7, y, 7, 7);
+      }
+
+      let lead = 0;
+      for (let i = 0; i < n; i++) {
+        xs[i] = startX + paces[i](t) * dist;
+        if (xs[i] > xs[lead] || (xs[i] === xs[lead] && finishTimes[i] < finishTimes[lead])) lead = i;
+      }
+      for (const i of drawOrder) {
+        const sprite = sprites[ducks[i].owner];
+        if (sprite.complete) g.drawImage(sprite, xs[i], ys[i], duckW, duckH);
+      }
+
+      const won = t >= finishTimes[winner];
+      const i = won ? winner : lead;
+      const cx = xs[i] + duckW / 2, cy = ys[i] + duckH / 2;
+      g.strokeStyle = won ? '#ffb400' : '#fff';
+      g.lineWidth = 3;
+      g.beginPath();
+      g.arc(cx, cy, Math.max(duckW, 14) * 0.75, 0, Math.PI * 2);
+      g.stroke();
+      const text = (won ? '🏆 ' : '') + ducks[i].label;
+      g.font = `700 ${font}px system-ui, sans-serif`;
+      g.textBaseline = 'middle';
+      const tw = g.measureText(text).width + 20, th = font + 8;
+      let bx = xs[i] - tw - 6;
+      if (bx < 4) bx = xs[i] + duckW + 6;
+      const by = Math.max(2, Math.min(H - th - 2, cy - th / 2));
+      g.fillStyle = won ? '#ffb400' : roster[ducks[i].owner].wing;
+      g.beginPath();
+      g.roundRect(bx, by, tw, th, th / 2);
+      g.fill();
+      g.fillStyle = won ? '#3a2a00' : '#fff';
+      g.fillText(text, bx + 10, by + th / 2);
+    };
+  }
+
   function runCountdown() {
     return new Promise((resolve) => {
       let n = COUNTDOWN_SECONDS;
@@ -452,13 +538,10 @@
     show('race');
     raceTitle.textContent = 'Get ready…';
 
-    const views = setupTrack();
-    views.forEach((v) => positionDuck(v, 0));
-
     // Decide the finishing order up front with a fair shuffle, then give each duck a
     // finish time by place and a wobbly pace curve that lands exactly on it.
-    const n = roster.length;
-    const order = shuffle(roster.map((_, i) => i));
+    const n = ducks.length;
+    const order = shuffle(ducks.map((_, i) => i));
     const finishTimes = new Array(n);
     order.forEach((duckIdx, place) => {
       finishTimes[duckIdx] = n === 1
@@ -469,28 +552,34 @@
     const placeOf = new Array(n);
     order.forEach((duckIdx, place) => { placeOf[duckIdx] = place; });
 
+    const drawPond = n > LANE_LIMIT ? setupPond(paces, finishTimes, order[0]) : null;
+    const views = drawPond ? [] : setupTrack();
+    views.forEach((v) => positionDuck(v, 0));
+    if (drawPond) drawPond(0);
+
     await runCountdown();
     raceTitle.textContent = 'And they\'re off! 🦆';
 
     const t0 = performance.now();
     const frame = (now) => {
       const t = Math.min(RACE_MS, now - t0);
+      if (drawPond) drawPond(t);
+      if (t >= finishTimes[order[0]]) raceTitle.textContent = `${ducks[order[0]].label} wins! 🏆`;
       views.forEach((v, i) => {
         positionDuck(v, paces[i](t));
         if (t >= finishTimes[i] && !v.duckEl.classList.contains('finished')) {
           v.duckEl.classList.add('finished');
           v.placeEl.textContent = ordinal(placeOf[i] + 1);
           v.placeEl.classList.add('show');
-          if (placeOf[i] === 0) {
-            v.placeEl.classList.add('gold');
-            raceTitle.textContent = `${roster[i].name} wins! 🏆`;
-          }
+          if (placeOf[i] === 0) v.placeEl.classList.add('gold');
         }
       });
       if (t < RACE_MS) {
         raceFrame = requestAnimationFrame(frame);
       } else {
-        lastOrder = order;
+        // Each name finishes where its best duck did.
+        lastOrder = [...new Set(order.map((i) => ducks[i].owner))];
+        winnerDuck = order[0];
         setTimeout(showResults, 800);
       }
     };
@@ -499,13 +588,18 @@
 
   // ---------- Results ----------
   function showResults() {
-    const n = lastOrder.length;
+    const total = lastOrder.length;
+    const n = Math.min(total, RESULTS_SHOWN);
+    $('resultNote').textContent = [
+      ducks.length > roster.length ? `Winning duck: ${ducks[winnerDuck].label} of ${ducks.length.toLocaleString()}.` : '',
+      total > n ? `Showing the top ${n} of ${total.toLocaleString()}; Copy order includes everyone.` : '',
+    ].join(' ').trim();
     orderEl.classList.toggle('two-col', n > 10);
     const rows = n > 10 ? Math.ceil(n / 2) : n;
     orderEl.style.gridTemplateRows = `repeat(${rows}, auto)`;
     const size = n <= 6 ? 32 : n <= 10 ? 26 : 22;
     orderEl.style.setProperty('--result-size', `${size}px`);
-    orderEl.innerHTML = lastOrder.map((idx, place) => {
+    orderEl.innerHTML = lastOrder.slice(0, n).map((idx, place) => {
       const d = roster[idx];
       return `<li class="${place === 0 ? 'winner' : ''}">
         <span class="pos">${place + 1}.</span>
@@ -601,13 +695,12 @@
       setupError.textContent = `Add at least ${MIN_DUCKS} ducks to race.`;
       return;
     }
-    if (names.length > MAX_DUCKS) {
-      setupError.textContent = `That's ${names.length} ducks. The pond fits ${MAX_DUCKS} at most.`;
-      return;
-    }
     setupError.textContent = '';
     saveNames(namesEl.value.split('\n').map((s) => s.trim()).filter(Boolean).join('\n'));
     roster = buildRoster(names);
+    const per = $('hundredX').checked ? 100 : 1;
+    ducks = roster.flatMap((d, owner) => Array.from({ length: per }, (_, k) =>
+      ({ owner, label: per > 1 ? `${d.name} #${k + 1}` : d.name })));
     startRace();
   }
 
@@ -616,6 +709,7 @@
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); onStart(); }
   });
   namesEl.addEventListener('input', () => { setupError.textContent = ''; updateCount(); });
+  $('hundredX').addEventListener('change', updateCount);
   $('againBtn').addEventListener('click', startRace);
   $('setupBtn').addEventListener('click', () => {
     stopConfetti();
